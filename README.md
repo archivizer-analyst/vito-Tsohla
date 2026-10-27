@@ -46,7 +46,7 @@ python skills/vito-people-crops/scripts/check_crops.py job/crops.json
 python tools/cut.py job/crops.json
 python skills/vito-enhance-prompts/scripts/check_prompts.py job/prompts.json job/crops/index.json
 python tools/enhance.py job            # OPENAI_API_KEY; --dry-run показує запити без відправки
-python tools/assemble.py job           # Photoshop через COM (Windows), без вікна; шари в групі people_enhanced
+python tools/assemble.py job           # Photoshop через COM (Windows), без вікна, лишається відкритим; шари в групі people_enhanced
 ```
 
 Залежності: Python 3.10+, Pillow, requests; Photoshop 2025 на машині збірки.

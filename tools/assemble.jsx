@@ -111,6 +111,7 @@ function main(manifestPath) {
         jpg.quality = 11;
         doc.saveAs(new File(job.jpg), jpg, true);
         doc.close(SaveOptions.DONOTSAVECHANGES);
+        app.purge(PurgeTarget.ALLCACHES);       // Photoshop stays open between assemblies
     } catch (e) {
         report.push("*\terror: " + e);
     } finally {
