@@ -36,6 +36,8 @@ GROUP = "people_enhanced"
 EXTS = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff")
 ASPECT_TOL = 0.02       # result vs box aspect: beyond this the stretch is reported
 SCRATCH_GB = 20         # Photoshop's scratch files above this: quit it when idle
+MAX_COVER = 0.9         # a mask over more of its crop has taken the crop, not the people: cut.py
+                        # leaves context round the people on every side
 
 
 def _p(path):
@@ -71,6 +73,7 @@ def main():
     if not crops:
         sys.exit("nothing to assemble")
     manifest = {"render": _p(os.path.join(job, index["render"])), "crops": crops, "group": GROUP,
+                "max_cover": MAX_COVER,
                 "psd": _p(os.path.join(job, "result.psd")), "jpg": _p(os.path.join(job, "result.jpg")),
                 "report": _p(os.path.join(job, "enhanced", "assemble.txt"))}
     man_path = os.path.join(job, "enhanced", "assemble.json")
@@ -98,9 +101,12 @@ def main():
         if line.startswith(("scratch", "photoshop quit")):
             print(line.strip() + (" GB of Photoshop scratch files" if line.startswith("scratch") else ""))
     report = open(manifest["report"], encoding="utf-8").read().strip().splitlines()
-    bad = [line for line in report if not line.endswith("\tmasked")]
+    bad = [line for line in report if line.split("\t")[1] != "masked" and not line.startswith("*\tphotoshop")]
     for line in report:
-        print(line.replace("\t", ": "))
+        print(line.replace("\t", ": ", 1).replace("\t", " "))
+    if any("\tbad mask" in line for line in report):
+        print("bad mask: Select Subject took the whole crop. In Photoshop 27.x switch Preferences > "
+              "Image Processing > Select Subject to Cloud (or check the GPU), then assemble again")
     print(f"-> {manifest['psd']}\n-> {manifest['jpg']}")
     sys.exit(1 if bad else 0)
 

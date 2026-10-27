@@ -5,10 +5,14 @@
 // Per crop: open the enhanced image, make it a smart object at its own resolution, copy it into
 // the render inside the group `job.group` (the later crop on top) and scale it onto its box. The
 // smart object keeps every pixel the generator made: stretching it along one side to fix the
-// proportions, or upscaling the render later, does not lose resolution. Then Select Subject on
-// that layer alone, the selection becomes the layer mask. A crop where Select Subject finds
-// nothing stays as a hidden layer without a mask and is reported.
-// Writes the manifest's `report` file: one line per crop, "<id>\tmasked|no subject|error: ...".
+// proportions, or upscaling the render later, does not lose resolution. A crop where Select
+// Subject finds nothing stays as a hidden layer without a mask and is reported.
+// Select Subject runs on the enhanced image alone, in its own document and at its own resolution,
+// before it becomes a smart object; the mask goes with the layer and scales with it. A mask that
+// covers more than `job.max_cover` of its crop has taken the crop, not its people (Photoshop 27.x
+// on the server did that to almost every crop): the layer stays hidden with that mask.
+// Writes the manifest's `report` file: "*\tphotoshop <version>", then one line per crop,
+// "<id>\tmasked\t<cover>%" | "<id>\tbad mask\t<cover>%" | "<id>\tno subject" | "<id>\terror: ...".
 
 function readText(path) {
     var f = new File(path);
@@ -52,6 +56,40 @@ function maskFromSelection() {
     executeAction(charIDToTypeID("Mk  "), d, DialogModes.NO);
 }
 
+// Share of the selection in the document: the mean of the alpha channel it is stored in. A grayscale
+// copy of it is averaged (Blur > Average) and its one value read (histograms of the mask itself
+// came out too low).
+function selectChannel(ref) {
+    var d = new ActionDescriptor();
+    d.putReference(charIDToTypeID("null"), ref);
+    executeAction(charIDToTypeID("slct"), d, DialogModes.NO);
+}
+
+function coverage(d, ch) {
+    var r = new ActionReference();
+    r.putName(charIDToTypeID("Chnl"), ch.name);
+    selectChannel(r);                           // the copy takes the target channel
+    d.selection.selectAll();
+    d.selection.copy();
+    d.selection.deselect();
+    r = new ActionReference();
+    r.putEnumerated(charIDToTypeID("Chnl"), charIDToTypeID("Chnl"), charIDToTypeID("RGB "));
+    selectChannel(r);
+    var g = app.documents.add(d.width, d.height, d.resolution, "vito_cover", NewDocumentMode.GRAYSCALE);
+    g.paste();
+    g.flatten();
+    g.activeLayer.applyAverage();
+    var hist = g.channels[0].histogram, best = 0;
+    g.close(SaveOptions.DONOTSAVECHANGES);
+    app.activeDocument = d;
+    for (var v = 1; v < 256; v++)
+        if (hist[v] > hist[best]) best = v;
+    return best / 255;
+}
+
+// The enhanced image becomes a smart object with its mask, in its own document: Select Subject sees
+// only this image at its full resolution, whatever layers and settings the render has. Returns
+// {layer, cover}: cover is the masked share of the crop, -1 when Select Subject found nothing.
 function pasteCrop(doc, c) {
     var w = c.box[2] - c.box[0], h = c.box[3] - c.box[1];
     var src = app.open(new File(c.file));
@@ -60,7 +98,23 @@ function pasteCrop(doc, c) {
     if (src.layers.length > 1) src.flatten();
     if (src.resolution != doc.resolution)      // same ppi: the copy keeps its pixel size
         src.resizeImage(undefined, undefined, doc.resolution, ResampleMethod.NONE);
+    src.selection.deselect();
+    selectSubject();
+    var ch = null, cover = -1;
+    if (hasSelection(src)) {
+        var f = c.feather * src.width.as("px") / w;     // feather is in render px
+        if (f > 0) src.selection.feather(f);
+        ch = src.channels.add();
+        src.selection.store(ch);
+        cover = coverage(src, ch);
+        src.selection.deselect();
+    }
     executeAction(stringIDToTypeID("newPlacedLayer"), undefined, DialogModes.NO);
+    if (ch) {
+        src.selection.load(ch);
+        maskFromSelection();
+        src.selection.deselect();
+    }
     var layer = src.activeLayer.duplicate(doc, ElementPlacement.PLACEATBEGINNING);
     src.close(SaveOptions.DONOTSAVECHANGES);
     app.activeDocument = doc;
@@ -68,10 +122,10 @@ function pasteCrop(doc, c) {
     layer.name = c.name;
     var b = layer.bounds;
     var bw = b[2].as("px") - b[0].as("px"), bh = b[3].as("px") - b[1].as("px");
-    layer.resize(100 * w / bw, 100 * h / bh, AnchorPosition.TOPLEFT);
+    layer.resize(100 * w / bw, 100 * h / bh, AnchorPosition.TOPLEFT);   // the linked mask follows
     b = layer.bounds;
     layer.translate(c.box[0] - b[0].as("px"), c.box[1] - b[1].as("px"));
-    return layer;
+    return {layer: layer, cover: cover};
 }
 
 function main(manifestPath) {
@@ -80,7 +134,7 @@ function main(manifestPath) {
     var dialogs = app.displayDialogs;
     app.preferences.rulerUnits = Units.PIXELS;
     app.displayDialogs = DialogModes.NO;
-    var report = [];
+    var report = ["*\tphotoshop " + app.version];
     try {
         var doc = app.open(new File(job.render));
         var group = doc.layerSets.add();
@@ -88,20 +142,18 @@ function main(manifestPath) {
         for (var i = 0; i < job.crops.length; i++) {
             var c = job.crops[i];
             try {
-                var layer = pasteCrop(doc, c);
-                layer.move(group, ElementPlacement.PLACEATBEGINNING);
-                doc.activeLayer = layer;
-                doc.selection.deselect();
-                selectSubject();
-                if (!hasSelection(doc)) {
-                    layer.visible = false;
+                var r = pasteCrop(doc, c);
+                r.layer.move(group, ElementPlacement.PLACEATBEGINNING);
+                var pct = Math.round(100 * r.cover) + "%";
+                if (r.cover < 0) {
+                    r.layer.visible = false;
                     report.push(c.id + "\tno subject");
-                    continue;
+                } else if (r.cover > job.max_cover) {   // the whole crop, not its people
+                    r.layer.visible = false;
+                    report.push(c.id + "\tbad mask\t" + pct);
+                } else {
+                    report.push(c.id + "\tmasked\t" + pct);
                 }
-                if (c.feather > 0) doc.selection.feather(c.feather);
-                maskFromSelection();
-                doc.selection.deselect();
-                report.push(c.id + "\tmasked");
             } catch (e) {
                 report.push(c.id + "\terror: " + e);
             }
