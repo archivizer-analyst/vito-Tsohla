@@ -7,8 +7,9 @@ render as the background, above it the group "people_enhanced" with one layer pe
 "<id> <desc>", masked by Photoshop's Select Subject) and <job>/result.jpg. Layers are pasted far first: a crop whose box ends lower on the
 render (nearer the camera) lies above. Crops without an enhanced result are left out and listed.
 
-An enhanced result may be any size and any of EXTS (the generator, an upscaler or a person may
-have made it): it is scaled onto its box. A result whose aspect differs from the box's by more
+Every layer is a smart object holding the enhanced result at its own resolution, scaled onto
+its box: stretching it to fix proportions or upscaling the render later loses nothing. A result
+may be any size and any of EXTS (the generator, an upscaler or a person may have made it). A result whose aspect differs from the box's by more
 than ASPECT_TOL is stretched the same way and reported.
 
 Runs tools/assemble.jsx in Photoshop through COM (Windows, Photoshop installed). When Photoshop

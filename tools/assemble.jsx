@@ -2,10 +2,12 @@
 // Run by tools/assemble.py through Photoshop's COM (DoJavaScriptFile) with one argument: the path
 // of the manifest it writes. Crops come in paste order (far first), each:
 //   {id, name, file, box: [x0, y0, x1, y1], feather}
-// Per crop: open the enhanced PNG, scale it to its box, copy it into the render as a layer at
-// the box inside the group `job.group` (the later crop on top), Select Subject on that layer
-// alone, the selection becomes the layer mask. A crop where
-// Select Subject finds nothing stays as a hidden layer without a mask and is reported.
+// Per crop: open the enhanced image, make it a smart object at its own resolution, copy it into
+// the render inside the group `job.group` (the later crop on top) and scale it onto its box. The
+// smart object keeps every pixel the generator made: stretching it along one side to fix the
+// proportions, or upscaling the render later, does not lose resolution. Then Select Subject on
+// that layer alone, the selection becomes the layer mask. A crop where Select Subject finds
+// nothing stays as a hidden layer without a mask and is reported.
 // Writes the manifest's `report` file: one line per crop, "<id>\tmasked|no subject|error: ...".
 
 function readText(path) {
@@ -56,13 +58,18 @@ function pasteCrop(doc, c) {
     if (src.mode != DocumentMode.RGB) src.changeMode(ChangeMode.RGB);
     if (src.bitsPerChannel != doc.bitsPerChannel) src.bitsPerChannel = doc.bitsPerChannel;
     if (src.layers.length > 1) src.flatten();
-    src.resizeImage(UnitValue(w, "px"), UnitValue(h, "px"), undefined, ResampleMethod.BICUBIC);
+    if (src.resolution != doc.resolution)      // same ppi: the copy keeps its pixel size
+        src.resizeImage(undefined, undefined, doc.resolution, ResampleMethod.NONE);
+    executeAction(stringIDToTypeID("newPlacedLayer"), undefined, DialogModes.NO);
     var layer = src.activeLayer.duplicate(doc, ElementPlacement.PLACEATBEGINNING);
     src.close(SaveOptions.DONOTSAVECHANGES);
     app.activeDocument = doc;
     doc.activeLayer = layer;
     layer.name = c.name;
     var b = layer.bounds;
+    var bw = b[2].as("px") - b[0].as("px"), bh = b[3].as("px") - b[1].as("px");
+    layer.resize(100 * w / bw, 100 * h / bh, AnchorPosition.TOPLEFT);
+    b = layer.bounds;
     layer.translate(c.box[0] - b[0].as("px"), c.box[1] - b[1].as("px"));
     return layer;
 }
