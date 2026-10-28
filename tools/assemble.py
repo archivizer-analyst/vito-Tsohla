@@ -105,8 +105,8 @@ def main():
     for line in report:
         print(line.replace("\t", ": ", 1).replace("\t", " "))
     if any("\tbad mask" in line for line in report):
-        print("bad mask: Select Subject took the whole crop. In Photoshop 27.x switch Preferences > "
-              "Image Processing > Select Subject to Cloud (or check the GPU), then assemble again")
+        print("bad mask: Select Subject took the whole crop; the layer is hidden. Try Select > Subject "
+              "on that enhanced image by hand in the same Photoshop, mask the layer by hand if it fails too")
     print(f"-> {manifest['psd']}\n-> {manifest['jpg']}")
     sys.exit(1 if bad else 0)
 

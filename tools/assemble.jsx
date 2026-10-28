@@ -9,8 +9,10 @@
 // Subject finds nothing stays as a hidden layer without a mask and is reported.
 // Select Subject runs on the enhanced image alone, in its own document and at its own resolution,
 // before it becomes a smart object; the mask goes with the layer and scales with it. A mask that
-// covers more than `job.max_cover` of its crop has taken the crop, not its people (Photoshop 27.x
-// on the server did that to almost every crop): the layer stays hidden with that mask.
+// covers more than `job.max_cover` of its crop has taken the crop, not its people: the layer stays
+// hidden with that mask. (Photoshop 27.x does that to almost every crop when Select Subject runs on
+// the crop's layer inside the render, as the first version did; in the crop's own document it does
+// not.)
 // Writes the manifest's `report` file: "*\tphotoshop <version>", then one line per crop,
 // "<id>\tmasked\t<cover>%" | "<id>\tbad mask\t<cover>%" | "<id>\tno subject" | "<id>\terror: ...".
 
