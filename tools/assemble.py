@@ -4,7 +4,8 @@
 
 Reads <job>/crops/index.json and the results in <job>/enhanced/; writes <job>/result.psd (the
 render as the background, above it the group "people_enhanced" with one layer per crop named
-"<id> <desc>", masked by Photoshop's Select Subject) and <job>/result.jpg. Layers are pasted far
+"<id> <desc>", masked by Photoshop's Select People: the crop's own people, at least OWN_PERSON inside
+its people_box; Select Subject where Select People is missing or finds none) and <job>/result.jpg. Layers are pasted far
 first: a crop whose box ends lower on the render (nearer the camera) lies above. Crops without an
 enhanced result are left out and listed.
 
@@ -31,6 +32,8 @@ import sys
 
 from PIL import Image
 
+from cut import CONTEXT
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 GROUP = "people_enhanced"
 EXTS = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff")
@@ -38,6 +41,18 @@ ASPECT_TOL = 0.02       # result vs box aspect: beyond this the stretch is repor
 SCRATCH_GB = 20         # Photoshop's scratch files above this: quit it when idle
 MAX_COVER = 0.9         # a mask over more of its crop has taken the crop, not the people: cut.py
                         # leaves context round the people on every side
+OWN_PERSON = 0.5        # Select People: a person at least this much inside the crop's people box
+                        # is the crop's own; the rest stand in its context and have crops of their own
+
+
+def _people_box(c):
+    """The crop's people box; an index without one (written before cut.py kept it): the box less
+    the context cut.py adds, which is exact unless the box was clamped or widened."""
+    if "people_box" in c:
+        return c["people_box"]
+    x0, y0, x1, y1 = c["box"]
+    mx, my = (x1 - x0) * CONTEXT / (1 + 2 * CONTEXT), (y1 - y0) * CONTEXT / (1 + 2 * CONTEXT)
+    return [x0 + mx, y0 + my, x1 - mx, y1 - my]
 
 
 def _p(path):
@@ -67,13 +82,13 @@ def main():
             print(f"{c['id']}: WARNING the result is {w}x{h}, aspect {w / h:.3f}, but its box is "
                   f"{bw}x{bh}, aspect {bw / bh:.3f} -- stretched onto the box, check the layer")
         crops.append({"id": c["id"], "name": f"{c['id']} {c['desc']}"[:200], "file": _p(found[0]),
-                      "box": c["box"], "feather": a.feather})
+                      "box": c["box"], "people_box": _people_box(c), "feather": a.feather})
     if missing:
         print("not enhanced, left out:", " ".join(missing))
     if not crops:
         sys.exit("nothing to assemble")
     manifest = {"render": _p(os.path.join(job, index["render"])), "crops": crops, "group": GROUP,
-                "max_cover": MAX_COVER,
+                "max_cover": MAX_COVER, "own_person": OWN_PERSON,
                 "psd": _p(os.path.join(job, "result.psd")), "jpg": _p(os.path.join(job, "result.jpg")),
                 "report": _p(os.path.join(job, "enhanced", "assemble.txt"))}
     man_path = os.path.join(job, "enhanced", "assemble.json")
@@ -105,8 +120,8 @@ def main():
     for line in report:
         print(line.replace("\t", ": ", 1).replace("\t", " "))
     if any("\tbad mask" in line for line in report):
-        print("bad mask: Select Subject took the whole crop; the layer is hidden. Try Select > Subject "
-              "on that enhanced image by hand in the same Photoshop, mask the layer by hand if it fails too")
+        print("bad mask: the selection took the whole crop; the layer is hidden. Try Select > People "
+              "or Select > Subject on that enhanced image by hand, mask the layer by hand if they fail too")
     print(f"-> {manifest['psd']}\n-> {manifest['jpg']}")
     sys.exit(1 if bad else 0)
 

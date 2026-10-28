@@ -1,20 +1,25 @@
 // Vito: the render with a masked layer per enhanced crop -> result.psd + result.jpg.
 // Run by tools/assemble.py through Photoshop's COM (DoJavaScriptFile) with one argument: the path
 // of the manifest it writes. Crops come in paste order (far first), each:
-//   {id, name, file, box: [x0, y0, x1, y1], feather}
+//   {id, name, file, box: [x0, y0, x1, y1], people_box: [x0, y0, x1, y1], feather}
 // Per crop: open the enhanced image, make it a smart object at its own resolution, copy it into
 // the render inside the group `job.group` (the later crop on top) and scale it onto its box. The
 // smart object keeps every pixel the generator made: stretching it along one side to fix the
-// proportions, or upscaling the render later, does not lose resolution. A crop where Select
-// Subject finds nothing stays as a hidden layer without a mask and is reported.
-// Select Subject runs on the enhanced image alone, in its own document and at its own resolution,
+// proportions, or upscaling the render later, does not lose resolution. A crop where nothing is
+// selected stays as a hidden layer without a mask and is reported.
+// The mask: Select People (Photoshop 27+), only the crop's own people, those at least
+// `job.own_person` inside its people box; the people of the next crops that stand in its context
+// are left to their own layers, and furniture is not taken. Without Select People, or when it finds
+// none of the crop's own, Select Subject (it takes the foreground: chairs and tables with the
+// people). Either runs on the enhanced image alone, in its own document and at its own resolution,
 // before it becomes a smart object; the mask goes with the layer and scales with it. A mask that
 // covers more than `job.max_cover` of its crop has taken the crop, not its people: the layer stays
 // hidden with that mask. (Photoshop 27.x does that to almost every crop when Select Subject runs on
 // the crop's layer inside the render, as the first version did; in the crop's own document it does
 // not.)
 // Writes the manifest's `report` file: "*\tphotoshop <version>", then one line per crop,
-// "<id>\tmasked\t<cover>%" | "<id>\tbad mask\t<cover>%" | "<id>\tno subject" | "<id>\terror: ...".
+// "<id>\tmasked\t<cover>%\t<how>" | "<id>\tbad mask\t<cover>%\t<how>" | "<id>\tno subject" |
+// "<id>\terror: ...", <how> being "people <N>" or "subject".
 
 function readText(path) {
     var f = new File(path);
@@ -37,6 +42,42 @@ function selectSubject() {
     var d = new ActionDescriptor();
     d.putBoolean(stringIDToTypeID("sampleAllLayers"), false);
     executeAction(stringIDToTypeID("autoCutout"), d, DialogModes.NO);
+}
+
+// Select People: the people Photoshop finds in the document, one at a time (numbered from 1), kept
+// when at least `own` of a person's bounds lie in `pb` (the crop's own people box, document px);
+// then selects the kept ones together. Returns how many were kept, -1 without Select People
+// (Photoshop before 27).
+function selectOwnPeople(doc, pb, own) {
+    var keep = new ActionList(), n = 0;
+    for (var i = 1; i <= 100; i++) {
+        doc.selection.deselect();
+        var d = new ActionDescriptor(), l = new ActionList();
+        l.putInteger(i);
+        d.putList(stringIDToTypeID("people"), l);
+        try {
+            executeAction(stringIDToTypeID("selectPeople"), d, DialogModes.NO);
+        } catch (e) {
+            if (i == 1) return -1;
+            break;
+        }
+        if (!hasSelection(doc)) break;
+        var b = doc.selection.bounds;
+        var x0 = b[0].as("px"), y0 = b[1].as("px"), x1 = b[2].as("px"), y1 = b[3].as("px");
+        var ix = Math.max(0, Math.min(x1, pb[2]) - Math.max(x0, pb[0]));
+        var iy = Math.max(0, Math.min(y1, pb[3]) - Math.max(y0, pb[1]));
+        if (ix * iy >= own * (x1 - x0) * (y1 - y0)) {
+            keep.putInteger(i);
+            n++;
+        }
+    }
+    doc.selection.deselect();
+    if (n) {
+        var s = new ActionDescriptor();
+        s.putList(stringIDToTypeID("people"), keep);
+        executeAction(stringIDToTypeID("selectPeople"), s, DialogModes.NO);
+    }
+    return n;
 }
 
 function hasSelection(doc) {
@@ -98,10 +139,11 @@ function corners() {
     return [Math.min(t.getDouble(0), t.getDouble(6)), Math.min(t.getDouble(1), t.getDouble(3))];
 }
 
-// The enhanced image becomes a smart object with its mask, in its own document: Select Subject sees
+// The enhanced image becomes a smart object with its mask, in its own document: the selection sees
 // only this image at its full resolution, whatever layers and settings the render has. Returns
-// {layer, cover}: cover is the masked share of the crop, -1 when Select Subject found nothing.
-function pasteCrop(doc, c) {
+// {layer, cover, how}: cover is the masked share of the crop, -1 when nothing was selected; how is
+// "people N" (Select People kept N of the crop's own people) or "subject" (Select Subject).
+function pasteCrop(doc, c, own) {
     var w = c.box[2] - c.box[0], h = c.box[3] - c.box[1];
     var src = app.open(new File(c.file));
     if (src.mode != DocumentMode.RGB) src.changeMode(ChangeMode.RGB);
@@ -110,8 +152,15 @@ function pasteCrop(doc, c) {
     if (src.resolution != doc.resolution)      // same ppi: the copy keeps its pixel size
         src.resizeImage(undefined, undefined, doc.resolution, ResampleMethod.NONE);
     var srcW = src.width.as("px"), srcH = src.height.as("px");
-    src.selection.deselect();
-    selectSubject();
+    var sx = srcW / w, sy = srcH / h, pb = c.people_box;
+    var n = selectOwnPeople(src, [(pb[0] - c.box[0]) * sx, (pb[1] - c.box[1]) * sy,
+                                  (pb[2] - c.box[0]) * sx, (pb[3] - c.box[1]) * sy], own);
+    var how = "people " + n;
+    if (n <= 0) {                                   // no Select People, or none of the crop's own
+        src.selection.deselect();
+        selectSubject();
+        how = "subject";
+    }
     var ch = null, cover = -1;
     if (hasSelection(src)) {
         var f = c.feather * srcW / w;                   // feather is in render px
@@ -137,7 +186,7 @@ function pasteCrop(doc, c) {
     layer.resize(100 * w / srcW, 100 * h / srcH, AnchorPosition.TOPLEFT);   // the linked mask follows
     var q = corners();
     layer.translate(c.box[0] - q[0], c.box[1] - q[1]);
-    return {layer: layer, cover: cover};
+    return {layer: layer, cover: cover, how: how};
 }
 
 function main(manifestPath) {
@@ -154,7 +203,7 @@ function main(manifestPath) {
         for (var i = 0; i < job.crops.length; i++) {
             var c = job.crops[i];
             try {
-                var r = pasteCrop(doc, c);
+                var r = pasteCrop(doc, c, job.own_person);
                 r.layer.move(group, ElementPlacement.PLACEATBEGINNING);
                 var pct = Math.round(100 * r.cover) + "%";
                 if (r.cover < 0) {
@@ -162,9 +211,9 @@ function main(manifestPath) {
                     report.push(c.id + "\tno subject");
                 } else if (r.cover > job.max_cover) {   // the whole crop, not its people
                     r.layer.visible = false;
-                    report.push(c.id + "\tbad mask\t" + pct);
+                    report.push(c.id + "\tbad mask\t" + pct + "\t" + r.how);
                 } else {
-                    report.push(c.id + "\tmasked\t" + pct);
+                    report.push(c.id + "\tmasked\t" + pct + "\t" + r.how);
                 }
             } catch (e) {
                 report.push(c.id + "\terror: " + e);
