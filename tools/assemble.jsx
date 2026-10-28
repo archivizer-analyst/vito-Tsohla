@@ -89,6 +89,15 @@ function coverage(d, ch) {
     return best / 255;
 }
 
+// Top-left corner [x, y] of the active smart object's content in document px, mask or not.
+function corners() {
+    var r = new ActionReference();
+    r.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+    var t = executeActionGet(r).getObjectValue(stringIDToTypeID("smartObjectMore"))
+        .getList(stringIDToTypeID("transform"));
+    return [Math.min(t.getDouble(0), t.getDouble(6)), Math.min(t.getDouble(1), t.getDouble(3))];
+}
+
 // The enhanced image becomes a smart object with its mask, in its own document: Select Subject sees
 // only this image at its full resolution, whatever layers and settings the render has. Returns
 // {layer, cover}: cover is the masked share of the crop, -1 when Select Subject found nothing.
@@ -100,11 +109,12 @@ function pasteCrop(doc, c) {
     if (src.layers.length > 1) src.flatten();
     if (src.resolution != doc.resolution)      // same ppi: the copy keeps its pixel size
         src.resizeImage(undefined, undefined, doc.resolution, ResampleMethod.NONE);
+    var srcW = src.width.as("px"), srcH = src.height.as("px");
     src.selection.deselect();
     selectSubject();
     var ch = null, cover = -1;
     if (hasSelection(src)) {
-        var f = c.feather * src.width.as("px") / w;     // feather is in render px
+        var f = c.feather * srcW / w;                   // feather is in render px
         if (f > 0) src.selection.feather(f);
         ch = src.channels.add();
         src.selection.store(ch);
@@ -122,11 +132,11 @@ function pasteCrop(doc, c) {
     app.activeDocument = doc;
     doc.activeLayer = layer;
     layer.name = c.name;
-    var b = layer.bounds;
-    var bw = b[2].as("px") - b[0].as("px"), bh = b[3].as("px") - b[1].as("px");
-    layer.resize(100 * w / bw, 100 * h / bh, AnchorPosition.TOPLEFT);   // the linked mask follows
-    b = layer.bounds;
-    layer.translate(c.box[0] - b[0].as("px"), c.box[1] - b[1].as("px"));
+    // Not from layer.bounds: a masked layer's bounds are its mask's, not the crop's. The scale comes
+    // from the crop's own pixel size, the offset from the smart object's corners.
+    layer.resize(100 * w / srcW, 100 * h / srcH, AnchorPosition.TOPLEFT);   // the linked mask follows
+    var q = corners();
+    layer.translate(c.box[0] - q[0], c.box[1] - q[1]);
     return {layer: layer, cover: cover};
 }
 
